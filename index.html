@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CT人数趋势看板</title>
+<script src="ct_data.js" onerror="console.log('数据文件未找到')"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #1a1a1a; padding: 24px; }
+h1 { font-size: 20px; font-weight: 500; margin-bottom: 6px; }
+.subtitle { font-size: 13px; color: #999; margin-bottom: 24px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.card { background: #fff; border: 0.5px solid rgba(0,0,0,0.1); border-radius: 12px; padding: 16px 20px; }
+.card-label { font-size: 12px; color: #999; margin-bottom: 6px; }
+.card-value { font-size: 24px; font-weight: 500; color: #1a1a1a; }
+.card-value.up { color: #1D9E75; }
+.card-value.down { color: #E24B4A; }
+.card-sub { font-size: 12px; color: #bbb; margin-top: 4px; }
+.section { background: #fff; border: 0.5px solid rgba(0,0,0,0.1); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.section-title { font-size: 15px; font-weight: 500; margin-bottom: 4px; }
+.section-sub { font-size: 12px; color: #999; margin-bottom: 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #666; }
+.legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+.no-data { text-align: center; padding: 60px; color: #bbb; font-size: 14px; }
+.team-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.team-card { background: #fff; border: 0.5px solid rgba(0,0,0,0.1); border-radius: 12px; padding: 16px; }
+.team-name { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+.team-count { font-size: 12px; color: #999; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<h2 class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;">9元团队CT人数每日趋势看板</h2>
+<h1>9元团队 CT 人数趋势看板</h1>
+<p class="subtitle" id="updateTime"></p>
+
+<div class="cards" id="cards"></div>
+
+<div class="section">
+  <div class="section-title">总体CT人数趋势</div>
+  <div class="section-sub">每日总CT人数 + 数据标注</div>
+  <div style="position:relative;width:100%;height:280px;">
+    <canvas id="totalChart" role="img" aria-label="CT人数每日趋势折线图"></canvas>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">每日变化（较前一天）</div>
+  <div class="section-sub">绿色=增加，红色=减少</div>
+  <div style="position:relative;width:100%;height:200px;">
+    <canvas id="diffChart" role="img" aria-label="CT人数每日变化柱状图"></canvas>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">各六级组织 CT 人数趋势</div>
+  <div class="section-sub">按部门分别展示规模变化</div>
+  <div class="legend" id="teamLegend"></div>
+  <div style="position:relative;width:100%;height:320px;">
+    <canvas id="teamChart" role="img" aria-label="各六级组织CT人数趋势"></canvas>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">各部门最新规模</div>
+  <div class="section-sub">今日各六级组织CT人数</div>
+  <div class="team-grid" id="teamCards"></div>
+</div>
+
+<script>
+const BASE_DATE = '2026-05-07';
+const COLORS = ['#378ADD','#1D9E75','#E24B4A','#BA7517','#534AB7','#D4537E','#0F6E56','#993C1D'];
+
+const history = (typeof window.CT_HISTORY !== 'undefined') ? window.CT_HISTORY : {};
+const dates = Object.keys(history).sort();
+
+if (dates.length === 0) {
+  document.body.innerHTML += '<div class="no-data">暂无数据，请先运行脚本生成数据</div>';
+}
+
+const latest = dates[dates.length - 1];
+const todayData = history[latest] || {};
+document.getElementById('updateTime').textContent = '最后更新：' + latest;
+
+function renderCards() {
+  const todayCount = todayData.count || 0;
+  const baseData = history[BASE_DATE];
+  const prevDate = dates.length >= 2 ? dates[dates.length - 2] : null;
+  const prevCount = prevDate ? history[prevDate].count : null;
+  const vsBase = baseData ? todayCount - baseData.count : null;
+  const vsPrev = prevCount !== null ? todayCount - prevCount : null;
+
+  document.getElementById('cards').innerHTML = `
+    <div class="card">
+      <div class="card-label">今日CT人数</div>
+      <div class="card-value">${todayCount} 人</div>
+      <div class="card-sub">${latest}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">较昨日变化</div>
+      <div class="card-value ${vsPrev === null ? '' : vsPrev >= 0 ? 'up' : 'down'}">${vsPrev === null ? '--' : (vsPrev >= 0 ? '+' : '') + vsPrev + ' 人'}</div>
+      <div class="card-sub">${prevCount !== null ? '昨日 ' + prevCount + ' 人' : '无昨日数据'}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">较基准日变化</div>
+      <div class="card-value ${vsBase === null ? '' : vsBase >= 0 ? 'up' : 'down'}">${vsBase === null ? '--' : (vsBase >= 0 ? '+' : '') + vsBase + ' 人'}</div>
+      <div class="card-sub">${baseData ? '基准日(' + BASE_DATE + ') ' + baseData.count + ' 人' : '无基准日数据'}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">累计记录天数</div>
+      <div class="card-value">${dates.length} 天</div>
+      <div class="card-sub">首次记录 ${dates[0] || '--'}</div>
+    </div>
+  `;
+}
+
+function renderTotalChart() {
+  const counts = dates.map(d => history[d].count);
+  const labels = dates.map(d => d.slice(5));
+  Chart.register(ChartDataLabels);
+  new Chart(document.getElementById('totalChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'CT人数',
+        data: counts,
+        borderColor: '#378ADD',
+        backgroundColor: 'rgba(55,138,221,0.08)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 5,
+        pointBackgroundColor: '#378ADD',
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        datalabels: {
+          align: 'top',
+          anchor: 'end',
+          color: '#378ADD',
+          font: { size: 11, weight: '500' },
+          formatter: v => v
+        }
+      },
+      scales: {
+        x: { ticks: { autoSkip: false, maxRotation: 45, font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: {
+          grid: { color: 'rgba(0,0,0,0.05)' },
+          ticks: { font: { size: 11 } },
+          suggestedMin: Math.min(...counts) - 5,
+          suggestedMax: Math.max(...counts) + 10
+        }
+      },
+      layout: { padding: { top: 20 } }
+    }
+  });
+}
+
+function renderDiffChart() {
+  const counts = dates.map(d => history[d].count);
+  const diffs = counts.map((c, i) => i === 0 ? 0 : c - counts[i-1]);
+  const labels = dates.map(d => d.slice(5));
+  new Chart(document.getElementById('diffChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: diffs,
+        backgroundColor: diffs.map(v => v >= 0 ? 'rgba(29,158,117,0.7)' : 'rgba(226,75,74,0.7)'),
+        borderColor: diffs.map(v => v >= 0 ? '#1D9E75' : '#E24B4A'),
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        datalabels: {
+          color: ctx => ctx.dataset.data[ctx.dataIndex] >= 0 ? '#1D9E75' : '#E24B4A',
+          anchor: ctx => ctx.dataset.data[ctx.dataIndex] >= 0 ? 'end' : 'start',
+          align: ctx => ctx.dataset.data[ctx.dataIndex] >= 0 ? 'top' : 'bottom',
+          font: { size: 11, weight: '500' },
+          formatter: v => v === 0 ? '' : (v > 0 ? '+' : '') + v
+        }
+      },
+      scales: {
+        x: { ticks: { autoSkip: false, maxRotation: 45, font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: { grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 11 } } }
+      },
+      layout: { padding: { top: 16, bottom: 16 } }
+    }
+  });
+}
+
+function renderTeamChart() {
+  const teamSet = new Set();
+  dates.forEach(d => {
+    const teams = history[d].teams || {};
+    Object.keys(teams).forEach(t => teamSet.add(t));
+  });
+  const teams = Array.from(teamSet).sort();
+  if (teams.length === 0) {
+    document.getElementById('teamChart').parentElement.innerHTML = '<div class="no-data" style="padding:40px;">暂无部门数据，请重新运行脚本更新数据</div>';
+    return;
+  }
+  const labels = dates.map(d => d.slice(5));
+  const datasets = teams.map((team, i) => ({
+    label: team,
+    data: dates.map(d => (history[d].teams || {})[team] || null),
+    borderColor: COLORS[i % COLORS.length],
+    backgroundColor: 'transparent',
+    tension: 0.3,
+    pointRadius: 4,
+    borderWidth: 2,
+    spanGaps: true,
+  }));
+
+  document.getElementById('teamLegend').innerHTML = teams.map((t, i) =>
+    `<div class="legend-item"><span class="legend-dot" style="background:${COLORS[i % COLORS.length]}"></span>${t}</div>`
+  ).join('');
+
+  new Chart(document.getElementById('teamChart'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        datalabels: {
+          color: ctx => COLORS[ctx.datasetIndex % COLORS.length],
+          align: 'top',
+          anchor: 'end',
+          font: { size: 10 },
+          formatter: v => v || ''
+        }
+      },
+      scales: {
+        x: { ticks: { autoSkip: false, maxRotation: 45, font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: { grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 11 } }, suggestedMin: 0 }
+      },
+      layout: { padding: { top: 20 } }
+    }
+  });
+}
+
+function renderTeamCards() {
+  const teams = todayData.teams || {};
+  const baseTeams = history[BASE_DATE] ? (history[BASE_DATE].teams || {}) : {};
+  const prevDate = dates.length >= 2 ? dates[dates.length - 2] : null;
+  const prevTeams = prevDate ? (history[prevDate].teams || {}) : {};
+  const sorted = Object.entries(teams).sort((a, b) => b[1] - a[1]);
+
+  if (sorted.length === 0) {
+    document.getElementById('teamCards').innerHTML = '<div class="no-data" style="padding:20px;">暂无部门数据，请重新运行脚本更新数据</div>';
+    return;
+  }
+
+  document.getElementById('teamCards').innerHTML = sorted.map(([team, count]) => {
+    const vsBase = baseTeams[team] !== undefined ? count - baseTeams[team] : null;
+    const vsPrev = prevTeams[team] !== undefined ? count - prevTeams[team] : null;
+    return `
+      <div class="team-card">
+        <div class="team-name">${team}</div>
+        <div class="team-count">今日CT：${count} 人</div>
+        <div style="display:flex;gap:16px;font-size:12px;">
+          <span style="color:${vsPrev === null ? '#bbb' : vsPrev >= 0 ? '#1D9E75' : '#E24B4A'}">
+            较昨日：${vsPrev === null ? '--' : (vsPrev >= 0 ? '+' : '') + vsPrev}
+          </span>
+          <span style="color:${vsBase === null ? '#bbb' : vsBase >= 0 ? '#1D9E75' : '#E24B4A'}">
+            较基准日：${vsBase === null ? '--' : (vsBase >= 0 ? '+' : '') + vsBase}
+          </span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+if (dates.length > 0) {
+  renderCards();
+  renderTotalChart();
+  renderDiffChart();
+  renderTeamChart();
+  renderTeamCards();
+}
+</script>
+</body>
+</html>
